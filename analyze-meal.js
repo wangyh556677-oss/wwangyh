@@ -11,7 +11,7 @@ import http from "node:http";
 loadEnvFile();
 
 const port = Number(process.env.PORT ?? 8787);
-const models = (process.env.OPENROUTER_MODELS ?? "openai/gpt-4o,openai/gpt-4o-mini")
+const models = (process.env.OPENROUTER_MODELS ?? "google/gemini-2.5-pro,openai/gpt-4o,google/gemini-2.5-flash,openai/gpt-4o-mini")
   .split(",")
   .map((item) => item.trim())
   .filter(Boolean);
@@ -24,11 +24,13 @@ const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const responseSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["mealName", "totalCalories", "confidence", "items", "notes"],
+  required: ["mealName", "totalCalories", "confidence", "calculationBasis", "correctionApplied", "items", "notes"],
   properties: {
     mealName: { type: "string" },
     totalCalories: { type: "integer" },
     confidence: { type: "number" },
+    calculationBasis: { type: "string" },
+    correctionApplied: { type: "boolean" },
     items: {
       type: "array",
       items: {
@@ -193,7 +195,14 @@ async function analyzeMealWithOpenRouter(imageBase64, mimeType, correctionHint) 
 
 async function analyzeMealWithModel(imageBase64, mimeType, correctionHint, currentModel) {
   const correctionText = correctionHint
-    ? `用户修正信息：${correctionHint} 请根据这条修正和原图重新计算。`
+    ? [
+        `用户修正信息：${correctionHint}`,
+        "这是一次二次校准，不是翻译任务。",
+        "你必须以用户修正后的食物名称为准，重新判断该食物的常见热量密度、可见份量、克重与烹饪方式。",
+        "不要沿用上一次的单项 calories 或 totalCalories。",
+        "如果新名称对应的食物类型、烹饪方式或热量密度不同，calories 必须随之变化。",
+        "在 calculationBasis 中简要说明修正后的估算依据。"
+      ].join("")
     : "";
 
   const openRouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -216,8 +225,13 @@ async function analyzeMealWithModel(imageBase64, mimeType, correctionHint, curre
           role: "system",
           content: [
             "你是越壕食堂的餐食热量识别引擎。",
-            "请基于图片估算食物种类、份量、热量和置信度。",
+            "你的核心任务是可靠估算热量，不是只识别食物名称。",
+            "请基于图片估算食物种类、可见份量、估计克重、烹饪方式、油脂/酱汁影响和置信度。",
             "所有可读文本字段必须使用简体中文，包括 mealName、items.name、items.portion 和 notes。",
+            "每个 item.calories 必须根据 estimatedGrams 和该食物常见 kcal/100g 重新推导。",
+            "totalCalories 必须接近 items.calories 之和。",
+            "calculationBasis 用一句中文说明主要热量估算依据。",
+            "correctionApplied 在收到用户修正信息时必须为 true，否则为 false。",
             "不要输出解释，只返回符合 schema 的 JSON。"
           ].join("")
         },
@@ -228,7 +242,7 @@ async function analyzeMealWithModel(imageBase64, mimeType, correctionHint, curre
               type: "text",
               text: [
                 "识别这张餐食照片。",
-                "重点关注中餐混合菜、米饭面食、酱汁、油量和遮挡带来的误差，并在 notes 中说明不确定因素。",
+                "重点关注中餐混合菜、米饭面食、油炸、坚果、奶茶甜品、酱汁、油量和遮挡带来的误差，并在 notes 中说明不确定因素。",
                 "请返回简体中文，不要返回英文食物名。",
                 correctionText
               ].filter(Boolean).join("")
@@ -364,6 +378,8 @@ function normalizeMealResult(result) {
     mealName: String(result.mealName || "餐食"),
     totalCalories,
     confidence: clampConfidence(result.confidence),
+    calculationBasis: String(result.calculationBasis || "按图片可见份量和常见热量密度估算"),
+    correctionApplied: Boolean(result.correctionApplied),
     items: items.map((item) => ({
       name: String(item.name || "未知食物"),
       portion: String(item.portion || "一份"),

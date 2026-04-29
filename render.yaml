@@ -9,7 +9,7 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODELS
-        value: openai/gpt-4o,openai/gpt-4o-mini
+        value: google/gemini-2.5-pro,openai/gpt-4o,google/gemini-2.5-flash,openai/gpt-4o-mini
       - key: OPENROUTER_APP_NAME
         value: Yuehao Canteen
       - key: RATE_LIMIT_PER_MINUTE
