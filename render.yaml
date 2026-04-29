@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: yuehao-canteen-meal-vision
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODELS
+        value: openai/gpt-4o,openai/gpt-4o-mini
+      - key: OPENROUTER_APP_NAME
+        value: Yuehao Canteen
+      - key: RATE_LIMIT_PER_MINUTE
+        value: "30"

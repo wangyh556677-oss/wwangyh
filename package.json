@@ -1,0 +1,11 @@
+{
+  "name": "yuehao-canteen-meal-vision",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node analyze-meal.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
