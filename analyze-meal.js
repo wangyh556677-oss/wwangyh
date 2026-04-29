@@ -11,6 +11,7 @@ import http from "node:http";
 loadEnvFile();
 
 const port = Number(process.env.PORT ?? 8787);
+const serviceVersion = "calorie-recalc-v2";
 const models = (process.env.OPENROUTER_MODELS ?? "google/gemini-2.5-pro,openai/gpt-4o,google/gemini-2.5-flash,openai/gpt-4o-mini")
   .split(",")
   .map((item) => item.trim())
@@ -66,6 +67,7 @@ const server = http.createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/health") {
       return sendJSON(response, 200, {
         ok: true,
+        version: serviceVersion,
         models
       });
     }
