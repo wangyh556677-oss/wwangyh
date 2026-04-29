@@ -98,7 +98,11 @@ const server = http.createServer(async (request, response) => {
       return sendJSON(response, 415, { error: "仅支持 JPEG、PNG 或 WebP 图片" });
     }
 
-    const result = await analyzeMealWithOpenRouter(image.data.toString("base64"), image.mimeType);
+    const result = await analyzeMealWithOpenRouter(
+      image.data.toString("base64"),
+      image.mimeType,
+      image.correctionHint
+    );
 
     return sendJSON(response, 200, normalizeMealResult(result));
   } catch (error) {
@@ -172,12 +176,12 @@ function loadEnvFile() {
   }
 }
 
-async function analyzeMealWithOpenRouter(imageBase64, mimeType) {
+async function analyzeMealWithOpenRouter(imageBase64, mimeType, correctionHint) {
   let lastError;
 
   for (const currentModel of models) {
     try {
-      return await analyzeMealWithModel(imageBase64, mimeType, currentModel);
+      return await analyzeMealWithModel(imageBase64, mimeType, correctionHint, currentModel);
     } catch (error) {
       lastError = error;
       console.error(`OpenRouter model failed: ${currentModel}`, error);
@@ -187,7 +191,11 @@ async function analyzeMealWithOpenRouter(imageBase64, mimeType) {
   throw lastError ?? new Error("No OpenRouter model configured");
 }
 
-async function analyzeMealWithModel(imageBase64, mimeType, currentModel) {
+async function analyzeMealWithModel(imageBase64, mimeType, correctionHint, currentModel) {
+  const correctionText = correctionHint
+    ? `用户修正信息：${correctionHint} 请根据这条修正和原图重新计算。`
+    : "";
+
   const openRouterResponse = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -209,6 +217,7 @@ async function analyzeMealWithModel(imageBase64, mimeType, currentModel) {
           content: [
             "你是越壕食堂的餐食热量识别引擎。",
             "请基于图片估算食物种类、份量、热量和置信度。",
+            "所有可读文本字段必须使用简体中文，包括 mealName、items.name、items.portion 和 notes。",
             "不要输出解释，只返回符合 schema 的 JSON。"
           ].join("")
         },
@@ -217,7 +226,12 @@ async function analyzeMealWithModel(imageBase64, mimeType, currentModel) {
           content: [
             {
               type: "text",
-              text: "识别这张餐食照片。重点关注中餐混合菜、米饭面食、酱汁、油量和遮挡带来的误差，并在 notes 中说明不确定因素。"
+              text: [
+                "识别这张餐食照片。",
+                "重点关注中餐混合菜、米饭面食、酱汁、油量和遮挡带来的误差，并在 notes 中说明不确定因素。",
+                "请返回简体中文，不要返回英文食物名。",
+                correctionText
+              ].filter(Boolean).join("")
             },
             {
               type: "image_url",
@@ -273,31 +287,44 @@ function parseMultipartImage(body, boundary) {
   const boundaryText = `--${boundary}`;
   const bodyText = body.toString("binary");
   const parts = bodyText.split(boundaryText);
+  let correctionHint = "";
+  let image;
 
   for (const part of parts) {
-    if (!part.includes('name="image"')) {
+    const headerEnd = part.indexOf("\r\n\r\n");
+    if (headerEnd === -1) {
       continue;
     }
 
-    const headerEnd = part.indexOf("\r\n\r\n");
-    if (headerEnd === -1) {
-      break;
-    }
-
     const headers = part.slice(0, headerEnd);
-    const mimeType = headers.match(/Content-Type:\s*([^\r\n]+)/i)?.[1]?.trim() ?? "image/jpeg";
-    const binaryStart = bodyText.indexOf(part) + headerEnd + 4;
-    const binaryEnd = bodyText.indexOf(`\r\n${boundaryText}`, binaryStart);
-    const data = body.subarray(binaryStart, binaryEnd === -1 ? undefined : binaryEnd);
 
-    if (data.length === 0) {
-      throw new Error("Image field is empty");
+    if (headers.includes('name="correctionHint"')) {
+      correctionHint = part
+        .slice(headerEnd + 4)
+        .replace(/\r\n--$/, "")
+        .trim();
+      continue;
     }
 
-    return { data, mimeType };
+    if (headers.includes('name="image"')) {
+      const mimeType = headers.match(/Content-Type:\s*([^\r\n]+)/i)?.[1]?.trim() ?? "image/jpeg";
+      const binaryStart = bodyText.indexOf(part) + headerEnd + 4;
+      const binaryEnd = bodyText.indexOf(`\r\n${boundaryText}`, binaryStart);
+      const data = body.subarray(binaryStart, binaryEnd === -1 ? undefined : binaryEnd);
+
+      if (data.length === 0) {
+        throw new Error("Image field is empty");
+      }
+
+      image = { data, mimeType };
+    }
   }
 
-  throw new Error("Missing image field");
+  if (!image) {
+    throw new Error("Missing image field");
+  }
+
+  return { ...image, correctionHint };
 }
 
 function extractChatCompletionContent(payload) {
